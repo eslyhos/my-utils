@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>AES Encrypt / Decrypt</title>
+
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+        <style>
+            body {
+                font-family: Verdana, Geneva, Tahoma, sans-serif;
+                background-color: #fcfcfc;
+            }
+
+            h3 {
+                text-align: center;
+            }
+
+            .container {
+                display: flex;
+                flex-direction: column;
+            }
+
+            .container div:not(:first-child) {
+                margin-top: 10px;
+            }
+
+            .action-container {
+                display: flex;
+                flex-direction: row;
+                justify-content: center;
+            }
+
+            input, textarea {
+                font-size: 1.3em;
+                border: 1px solid lightgray;
+                border-radius: 5px;
+                background-color: #fcfcfc;
+            }
+
+            button {
+                font-size: 1em;
+                height: 2.5em;
+                border: none;
+                border-radius: 5px;
+                cursor: pointer;
+                color: white;
+                padding: 0 0.5em 0 0.5em;
+            }
+
+            #txtPassword {
+                width: 100%;
+            }
+
+            #txaContent {
+                height: 200px;
+                width: 100%
+            }
+
+            #timeoutMsg {
+                background-color: #fceda7;
+                border-radius: 5px;
+                padding: 8px 12px;
+                text-align: center;
+                font-size: 0.95em;
+            }
+
+        </style>
+    </head>
+    <body>
+        <h3>AES Encrypt / Decrypt</h3>
+
+        <div class="container">
+            <div>
+                <input id="txtPassword" type="password" autocomplete="new-password" placeholder="Password" />
+            </div>
+
+            <div class="action-container">
+                <button id="btnEncrypt" type="button" onclick="handleEncrypt();"
+                    style="background-color: darkolivegreen;">
+                    Encrypt
+                </button>
+                <button id="btnDecrypt" type="button" onclick="handleDecrypt();" 
+                    style="margin-left: 10px; background-color: darkgoldenrod;">
+                    Decrypt
+                </button>
+                <button id="btnClear" type="button" onclick="handleClear();"
+                    style="margin-left: 10px; background-color: dimgray;">
+                    Clear
+                </button>
+            </div>
+
+            <div id="timeoutMsg">
+                Content will be cleared automatically 10 minutes after leaving this page.
+            </div>
+
+            <div>
+                <textarea id="txaContent"></textarea>
+            </div>
+        </div>
+
+        <script type="text/javascript">
+
+            const DECRYPT_TIMEOUT_MS = 10 * 60 * 1000;
+            const HIDDEN_AT_KEY = 'hiddenAt';
+
+            function autoClear() {
+                document.querySelector('#txtPassword').value = '';
+                document.querySelector('#txaContent').value = '';
+                sessionStorage.removeItem(HIDDEN_AT_KEY);
+            }
+
+            function onPageHidden() {
+                sessionStorage.setItem(HIDDEN_AT_KEY, Date.now().toString());
+            }
+
+            function onPageVisible() {
+                const hiddenAt = sessionStorage.getItem(HIDDEN_AT_KEY);
+                if (!hiddenAt) return;
+                if (Date.now() - parseInt(hiddenAt, 10) >= DECRYPT_TIMEOUT_MS) {
+                    autoClear();
+                } else {
+                    sessionStorage.removeItem(HIDDEN_AT_KEY);
+                }
+            }
+
+            // Taken and modified from https://github.com/bradyjoslin/webcrypto-example
+
+            function bytesToBase64(byteArr) {
+                const base64ByteArr = new Uint8Array(byteArr).reduce((data, byte) => data + String.fromCharCode(byte), '')
+                return btoa(base64ByteArr);
+            };
+
+            function base64ToBytes(base64) {
+                const byteArr = Uint8Array.from(atob(base64), (c) => c.charCodeAt(null));
+                return byteArr;
+            }
+
+            async function importKey(plainKey) {
+                const importedKey = await crypto.subtle.importKey(
+                    'raw',
+                    new TextEncoder().encode(plainKey), 
+                    'PBKDF2',
+                    false,
+                    ['deriveKey']);
+
+                return importedKey;
+            }
+
+            async function deriveKey(importedKey, saltByteArr) {
+                const derivedKey = await crypto.subtle.deriveKey(
+                    { name: 'PBKDF2', salt: saltByteArr, iterations: 600000, hash: 'SHA-256' },
+                    importedKey,
+                    { name: 'AES-GCM', length: 256 },
+                    false,
+                    ['encrypt', 'decrypt']
+                );
+
+                return derivedKey;
+            }
+
+            function joinEncryptedByteArr(saltByteArr, ivByteArr, encryptedByteArr) {
+                let joinedByteArr = new Uint8Array(saltByteArr.byteLength + ivByteArr.byteLength + encryptedByteArr.byteLength);
+                joinedByteArr.set(saltByteArr, 0);
+                joinedByteArr.set(ivByteArr, saltByteArr.byteLength);
+                joinedByteArr.set(encryptedByteArr, saltByteArr.byteLength + ivByteArr.byteLength);
+                const base64 = bytesToBase64(joinedByteArr);
+                return base64;
+            }
+
+            function sliceEncryptedBase64(joinedBase64) {
+                const joinedByteArr = base64ToBytes(joinedBase64);
+                const saltByteArr = joinedByteArr.slice(0, 16);
+                const ivByteArr = joinedByteArr.slice(16, 16 + 12);
+                const encryptedByteArr = joinedByteArr.slice(16 + 12);
+                return { 
+                    saltByteArr: saltByteArr,
+                    ivByteArr: ivByteArr,
+                    encryptedByteArr: encryptedByteArr
+                };
+            }
+
+            async function encrypt(plainText, plainKey) {
+                try {
+                    const importedKey = await importKey(plainKey);
+                    const saltByteArr = crypto.getRandomValues(new Uint8Array(16));
+                    const derivedKey = await deriveKey(importedKey, saltByteArr);
+                    const ivByteArr = crypto.getRandomValues(new Uint8Array(12));
+                    const encryptedBuffer = await crypto.subtle.encrypt(
+                        { name: 'AES-GCM', iv: ivByteArr },
+                        derivedKey,
+                        new TextEncoder().encode(plainText));
+
+                    const encryptedByteArr = new Uint8Array(encryptedBuffer);
+                    const base64 = joinEncryptedByteArr(saltByteArr, ivByteArr, encryptedByteArr);
+                    return base64;
+                } catch (e) {
+                    alert(`Error: ${e}`);
+                }
+            }
+
+            async function decrypt(encryptedBase64, plainKey) {
+                try {
+                    const sliced = sliceEncryptedBase64(encryptedBase64);
+                    const saltByteArr = sliced.saltByteArr;
+                    const ivByteArr = sliced.ivByteArr;
+                    const encryptedByteArr = sliced.encryptedByteArr;
+
+                    const importedKey = await importKey(plainKey);
+                    const derivedKey = await deriveKey(importedKey, saltByteArr);
+
+                    const plainTextByteArr = await window.crypto.subtle.decrypt(
+                        { name: 'AES-GCM', iv: ivByteArr },
+                        derivedKey,
+                        encryptedByteArr);
+                        
+                    const plainText = new TextDecoder().decode(plainTextByteArr);
+                    return plainText
+                } catch (e) {
+                    alert(`Error: ${e}`);
+                }
+            }
+
+            async function handleEncrypt() {
+                const $txtPassword = document.querySelector('#txtPassword');
+                const $txaContent = document.querySelector('#txaContent');
+
+                if ($txaContent.value.trim() === '' || $txtPassword.value.trim() === '')
+                    return;
+
+                const encryptedBase64 = await encrypt($txaContent.value, $txtPassword.value);
+                $txaContent.value = encryptedBase64;
+            }
+
+            async function handleDecrypt() {
+                const $txtPassword = document.querySelector('#txtPassword');
+                const $txaContent = document.querySelector('#txaContent');
+
+                if ($txaContent.value.trim() === '' || $txtPassword.value.trim() === '')
+                    return;
+
+                const plainText = await decrypt($txaContent.value, $txtPassword.value);
+                $txaContent.value = plainText;
+            }
+
+            async function handleClear() {
+                document.querySelector('#txtPassword').value = '';
+                document.querySelector('#txaContent').value = '';
+            }
+
+            function expandTextArea() {
+                //expand textarea to fill the screen
+                const docHeight = document.documentElement.scrollHeight;
+                const $txaContent = document.querySelector('#txaContent');
+                const txaContentTop = $txaContent.offsetTop;
+                const buffer = 30;
+                $txaContent.style.height = `${docHeight - txaContentTop - buffer}px`;
+            }
+
+            document.addEventListener('DOMContentLoaded', () => {
+                expandTextArea();
+
+                document.addEventListener('visibilitychange', () => {
+                    if (document.visibilityState === 'hidden') onPageHidden();
+                    else onPageVisible();
+                });
+            });
+            
+        </script>
+    </body>
+</html>
